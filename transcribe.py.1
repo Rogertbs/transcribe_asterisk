@@ -1,0 +1,57 @@
+#!/usr/bin/env python3
+import asyncio
+import websockets
+import io
+import soundfile as sf
+import numpy as np
+from faster_whisper import WhisperModel
+from datetime import datetime
+
+# Inicializa o modelo (use 'cuda' se quiser GPU)
+model = WhisperModel("large-v3", compute_type="int8_float16", device="cuda")  # ou "cuda"
+
+# Parâmetros de áudio
+SAMPLE_RATE = 8000
+CHANNELS = 1
+SAMPLE_WIDTH = 2  # bytes (16-bit PCM)
+CHUNK_DURATION_SECONDS = 3
+CHUNK_SIZE = SAMPLE_RATE * SAMPLE_WIDTH * CHUNK_DURATION_SECONDS
+
+async def handler(websocket, path):
+    print("📞 Nova conexão de áudio do Asterisk")
+
+    buffer = bytearray()
+    segment_count = 0
+
+    try:
+        async for message in websocket:
+            buffer.extend(message)
+
+            while len(buffer) >= CHUNK_SIZE:
+                # Extrai um chunk de áudio do buffer
+                audio_chunk = buffer[:CHUNK_SIZE]
+                buffer = buffer[CHUNK_SIZE:]
+
+                # Salva em WAV para transcrição
+                filename = f"chunk_{datetime.now().strftime('%H%M%S_%f')}.wav"
+                print(filename)
+                with sf.SoundFile(filename, mode='w', samplerate=SAMPLE_RATE, channels=CHANNELS,
+                                  format='WAV', subtype='PCM_16') as f:
+                    data = np.frombuffer(audio_chunk, dtype='int16')
+                    f.write(data)
+
+                # Transcreve
+                segments, _ = model.transcribe(filename, language='pt')
+                print("📝 Transcrição parcial:")
+                for seg in segments:
+                    print(f"{seg.start:.1f}s - {seg.end:.1f}s: {seg.text}")
+
+    except websockets.exceptions.ConnectionClosed:
+        print("🔚 Conexão encerrada.")
+
+start_server = websockets.serve(handler, "0.0.0.0", 8765)
+
+print("🔊 Servidor WebSocket de transcrição iniciado em ws://0.0.0.0:8765")
+asyncio.get_event_loop().run_until_complete(start_server)
+asyncio.get_event_loop().run_forever()
+
